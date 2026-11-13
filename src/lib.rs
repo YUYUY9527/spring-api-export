@@ -492,6 +492,10 @@ public class BothController {
         let users = doc["paths"].get("/users").expect("/users should be present");
         assert!(users.get("get").is_some(), "GET /users missing: {users}");
         assert!(users.get("post").is_some(), "POST /users missing: {users}");
+        assert_ne!(
+            users["get"]["operationId"], users["post"]["operationId"],
+            "operationId must stay unique per operation: {users}"
+        );
 
         Main.run_command("export-markdown", &host.invocation(), None)
             .expect("markdown export should succeed");

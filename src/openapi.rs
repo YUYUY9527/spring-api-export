@@ -26,6 +26,16 @@ impl OpenApiWriter {
             grouped.entry(e.path.clone()).or_default().push(e);
         }
 
+        // `@RequestMapping(method = {GET, POST})` yields one endpoint per verb from the
+        // same handler, so the bare `controller_handler` id would repeat. Only those
+        // handlers get the verb appended; everything else keeps its existing id.
+        let mut handler_counts: BTreeMap<(String, String), usize> = BTreeMap::new();
+        for e in endpoints {
+            *handler_counts
+                .entry((e.controller.clone(), e.handler.clone()))
+                .or_insert(0) += 1;
+        }
+
         for path in &order {
             let mut ops = Map::new();
             for ep in &grouped[path] {
@@ -34,10 +44,16 @@ impl OpenApiWriter {
                 if !ep.description.is_empty() {
                     op.insert("description".into(), json!(ep.description));
                 }
-                op.insert(
-                    "operationId".into(),
-                    json!(format!("{}_{}", snake(&ep.controller), snake(&ep.handler))),
-                );
+                let mut op_id = format!("{}_{}", snake(&ep.controller), snake(&ep.handler));
+                if handler_counts
+                    .get(&(ep.controller.clone(), ep.handler.clone()))
+                    .copied()
+                    .unwrap_or(1)
+                    > 1
+                {
+                    op_id = format!("{}_{}", op_id, ep.method.to_lowercase());
+                }
+                op.insert("operationId".into(), json!(op_id));
                 op.insert("tags".into(), json!([ep.controller]));
 
                 let params: Vec<Value> = ep

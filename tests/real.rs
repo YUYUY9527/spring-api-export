@@ -3,7 +3,7 @@
 use openidea_plugin_yuyuy_spring_api_export::java::JavaFile;
 use openidea_plugin_yuyuy_spring_api_export::markdown::DtoResolver;
 use openidea_plugin_yuyuy_spring_api_export::openapi::OpenApiWriter;
-use openidea_plugin_yuyuy_spring_api_export::spring::{expand_object_params, is_controller, parse_endpoint};
+use openidea_plugin_yuyuy_spring_api_export::spring::{expand_object_params, is_controller, parse_endpoints};
 
 #[test]
 fn dump_real_files() {
@@ -21,9 +21,7 @@ fn dump_real_files() {
             println!("class {} kind={} ctrl={} fields={} methods={}", c.name, c.kind, is_controller(c), c.fields.len(), c.methods.len());
             if is_controller(c) {
                 for m in &c.methods {
-                    if let Some(ep) = parse_endpoint(c, m) {
-                        endpoints.push(ep);
-                    }
+                    endpoints.extend(parse_endpoints(c, m));
                 }
             }
             resolver.add_class(c.clone());
