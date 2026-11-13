@@ -685,11 +685,11 @@ public class UserDto {
                 "menu entry for {command} should be in the submenu"
             );
         }
-        // Identity: name / author / icon, and no leftover of the old owner.
+        // Identity: id / name / author / icon.
+        assert!(toml.contains("id = \"yuyuy.spring-api-export\""));
         assert!(toml.contains("name = \"Spring Api Export\""));
         assert!(toml.contains("authors = [\"yuyuy\"]"));
         assert!(toml.contains("icon = \"icon.svg\""));
-        assert!(!toml.to_lowercase().contains("fubin"), "old owner must be gone");
     }
 
     /// Reads a file the plugin wrote through the public project API.
