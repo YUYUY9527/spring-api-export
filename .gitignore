@@ -1,0 +1,9 @@
+# Build output of `cargo build` / `openidea-plugin build`
+/target
+
+# Publisher signing keys must never be committed
+*.key
+
+# signed package (upload it to a GitHub release instead)
+*.oiplugin
+

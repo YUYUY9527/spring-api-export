@@ -1,0 +1,65 @@
+id = "yuyuy.spring-api-export"
+name = "Spring Api Export"
+version = "0.1.0"
+description = "Exports Spring Boot controller API docs (Markdown / OpenAPI) with Javadoc and DTO field comments, and imports selected endpoints into Apifox."
+authors = ["yuyuy"]
+icon = "icon.svg"
+categories = ["tools", "frameworks"]
+engines.openidea = "^1.4"
+# Built by `openidea-plugin build`. The code is loaded the first time one of
+# its commands runs; the commands below show in Find Action before that.
+wasm = "dist/plugin.wasm"
+
+# What the code may do. The user approves these when installing.
+[capabilities]
+required = ["project.read", "project.write", "storage", "secrets", "net:api.apifox.com"]
+
+# Access token for the Apifox open API. It is stored in the OS keychain; the
+# plugin never sees it — requests carry `{{secret:apifox_token}}` and the host
+# fills it in on the way out.
+[[contributes.secrets]]
+name = "apifox_token"
+label = "Apifox Access Token"
+description = "Apifox › Account Settings › Open API — create a system access token (sent as a Bearer token)."
+
+[[contributes.commands]]
+id = "export-markdown"
+title = "Spring Api Export: Export Markdown API Doc"
+category = "Spring Api Export"
+
+[[contributes.commands]]
+id = "export-openapi"
+title = "Spring Api Export: Export OpenAPI JSON"
+category = "Spring Api Export"
+
+[[contributes.commands]]
+id = "export-apifox"
+title = "Spring Api Export: Export to Apifox"
+category = "Spring Api Export"
+
+[[contributes.commands]]
+id = "configure-apifox"
+title = "Spring Api Export: Configure Apifox (project id / token)"
+category = "Spring Api Export"
+
+# Right-click a controller file or folder in the Project view: every entry is
+# grouped under one "Spring Api Export" submenu (API 1.3+).
+[[contributes.menus]]
+menu = "projectView.context"
+command = "export-apifox"
+submenu = "Spring Api Export"
+
+[[contributes.menus]]
+menu = "projectView.context"
+command = "export-markdown"
+submenu = "Spring Api Export"
+
+[[contributes.menus]]
+menu = "projectView.context"
+command = "export-openapi"
+submenu = "Spring Api Export"
+
+[[contributes.menus]]
+menu = "projectView.context"
+command = "configure-apifox"
+submenu = "Spring Api Export"
