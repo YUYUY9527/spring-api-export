@@ -375,9 +375,7 @@ fn parse_files(
         for cls in &parsed.classes {
             if take_endpoints && spring::is_controller(cls) {
                 for m in &cls.methods {
-                    if let Some(ep) = spring::parse_endpoint(cls, m) {
-                        endpoints.push(ep);
-                    }
+                    endpoints.extend(spring::parse_endpoints(cls, m));
                 }
             }
             resolver.add_class(cls.clone());
@@ -468,6 +466,38 @@ public class UserDto {
         let text = written(MARKDOWN_PATH);
         assert!(text.contains("分页查询用户"), "javadoc summary missing:\n{text}");
         assert!(text.contains("用户名"), "DTO field comment missing:\n{text}");
+    }
+
+    #[test]
+    fn multi_verb_mapping_exports_every_http_method() {
+        let host = MockHost::install().with_capabilities(CAPS);
+        host.add_file(
+            "/project/src/main/java/com/example/web/BothController.java",
+            r#"
+package com.example.web;
+
+@RestController
+public class BothController {
+    /** 同时支持 GET 和 POST */
+    @RequestMapping(value = "/users", method = {RequestMethod.GET, RequestMethod.POST})
+    public String both() { return "ok"; }
+}
+"#,
+        );
+        Main.run_command("export-openapi", &host.invocation(), None)
+            .expect("openapi export should succeed");
+
+        let doc: serde_json::Value =
+            serde_json::from_str(&written(OPENAPI_PATH)).expect("valid JSON");
+        let users = doc["paths"].get("/users").expect("/users should be present");
+        assert!(users.get("get").is_some(), "GET /users missing: {users}");
+        assert!(users.get("post").is_some(), "POST /users missing: {users}");
+
+        Main.run_command("export-markdown", &host.invocation(), None)
+            .expect("markdown export should succeed");
+        let md = written(MARKDOWN_PATH);
+        assert!(md.contains("GET /users"), "GET /users missing from markdown:\n{md}");
+        assert!(md.contains("POST /users"), "POST /users missing from markdown:\n{md}");
     }
 
     #[test]

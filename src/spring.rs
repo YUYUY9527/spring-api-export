@@ -71,9 +71,11 @@ fn join_path(base: &str, sub: &str) -> String {
 /// HTTP verbs Spring accepts in `RequestMethod`.
 const HTTP_VERBS: &[&str] = &["GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS", "TRACE"];
 
-/// `@RequestMapping(method = RequestMethod.POST)` (or a set of them).
-/// Returns the first recognised verb, in either attribute order.
-fn explicit_method(anns: &[crate::java::Ann]) -> Option<String> {
+/// `@RequestMapping(method = RequestMethod.POST)` — Spring declares `method` as
+/// `RequestMethod[]`, so `{GET, POST}` maps the handler to several endpoints.
+/// Returns every recognised verb, in declaration order, in either attribute order.
+fn explicit_methods(anns: &[crate::java::Ann]) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
     for a in anns {
         if a.name != "RequestMapping" {
             continue;
@@ -85,12 +87,12 @@ fn explicit_method(anns: &[crate::java::Ann]) -> Option<String> {
         let inner = raw.trim().trim_start_matches('{').trim_end_matches('}').to_string();
         for part in crate::java::split_args(&inner) {
             let verb = part.trim().rsplit('.').next().unwrap_or("").trim().to_uppercase();
-            if HTTP_VERBS.contains(&verb.as_str()) {
-                return Some(verb);
+            if HTTP_VERBS.contains(&verb.as_str()) && !out.contains(&verb) {
+                out.push(verb);
             }
         }
     }
-    None
+    out
 }
 
 const MAPPING_ANNOS: &[(&str, &str)] = &[
@@ -197,14 +199,17 @@ fn param_alias(args: &str) -> Option<String> {
     None
 }
 
-/// Parses one endpoint from a controller method. Returns None when it has no mapping.
-pub fn parse_endpoint(cls: &JavaClass, m: &MethodRaw) -> Option<Endpoint> {
-    let mut method: Option<String> = None;
+/// Parses one controller method into one endpoint per declared HTTP method.
+/// Empty when the method carries no mapping.
+pub fn parse_endpoints(cls: &JavaClass, m: &MethodRaw) -> Vec<Endpoint> {
+    let mut methods: Vec<String> = Vec::new();
     let mut sub_path = String::new();
     for a in &m.anns {
         for (name, verb) in MAPPING_ANNOS {
             if &a.name == name {
-                method = Some(verb.to_string());
+                if methods.is_empty() {
+                    methods.push(verb.to_string());
+                }
                 sub_path = ann_path(a).unwrap_or_default();
             }
         }
@@ -212,12 +217,14 @@ pub fn parse_endpoint(cls: &JavaClass, m: &MethodRaw) -> Option<Endpoint> {
             if sub_path.is_empty() {
                 sub_path = ann_path(a).unwrap_or_default();
             }
-            if method.is_none() {
-                method = explicit_method(&m.anns);
+            if methods.is_empty() {
+                methods = explicit_methods(&m.anns);
             }
         }
     }
-    let method = method?;
+    if methods.is_empty() {
+        return Vec::new();
+    }
     let path = join_path(&base_path(cls), &sub_path);
 
     let jd = m.javadoc.as_ref();
@@ -249,7 +256,7 @@ pub fn parse_endpoint(cls: &JavaClass, m: &MethodRaw) -> Option<Endpoint> {
         .unwrap_or_default();
 
     let mut ep = Endpoint {
-        method,
+        method: methods[0].clone(),
         path,
         controller: cls.name.clone(),
         controller_desc: cls
@@ -379,7 +386,23 @@ pub fn parse_endpoint(cls: &JavaClass, m: &MethodRaw) -> Option<Endpoint> {
     ep.response = payload;
     ep.return_desc = jd.map(|j| j.ret.clone()).unwrap_or_default();
 
-    Some(ep)
+    // `method = {GET, POST}` yields one endpoint per verb, sharing everything else.
+    methods
+        .iter()
+        .enumerate()
+        .map(|(i, verb)| {
+            let mut e = ep.clone();
+            if i > 0 {
+                e.method = verb.clone();
+            }
+            e
+        })
+        .collect()
+}
+
+/// First endpoint of `parse_endpoints`; None when the method has no mapping.
+pub fn parse_endpoint(cls: &JavaClass, m: &MethodRaw) -> Option<Endpoint> {
+    parse_endpoints(cls, m).into_iter().next()
 }
 
 fn collect_param_anns(piece: &str) -> Vec<(String, String)> {
@@ -848,11 +871,12 @@ mod tests {
         "#;
         let f = JavaFile::parse(src);
         let cls = &f.classes[0];
-        let eps: Vec<Endpoint> = cls.methods.iter().filter_map(|m| parse_endpoint(cls, m)).collect();
-        assert_eq!(eps.len(), 3);
+        let eps: Vec<Endpoint> = cls.methods.iter().flat_map(|m| parse_endpoints(cls, m)).collect();
+        assert_eq!(eps.len(), 4);
         assert_eq!((eps[0].method.as_str(), eps[0].path.as_str()), ("POST", "/users"));
         assert_eq!((eps[1].method.as_str(), eps[1].path.as_str()), ("POST", "/users"));
         assert_eq!((eps[2].method.as_str(), eps[2].path.as_str()), ("GET", "/multi"));
+        assert_eq!((eps[3].method.as_str(), eps[3].path.as_str()), ("POST", "/multi"));
     }
 
     #[test]
