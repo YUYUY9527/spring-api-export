@@ -1,6 +1,6 @@
 id = "yuyuy.spring-api-export"
 name = "Spring Api Export"
-version = "0.1.0"
+version = "0.1.1"
 description = "Exports Spring Boot controller API docs (Markdown / OpenAPI) with Javadoc and DTO field comments, and imports selected endpoints into Apifox."
 authors = ["yuyuy"]
 icon = "icon.svg"

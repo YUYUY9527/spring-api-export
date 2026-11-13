@@ -814,22 +814,73 @@ pub fn first_string(text: &str) -> Option<String> {
     None
 }
 
-/// Annotation attribute value lookup: `attr = "v"`, bare `"v"`, or `{ "a", "b" }`.
-pub fn ann_string(ann: &Ann, attr: &str) -> Option<String> {
-    let t = ann.args.trim();
-    if t.is_empty() {
-        return None;
+/// Splits annotation arguments on top-level commas. Commas inside strings,
+/// `(...)`, `{...}`, `<...>` and `[...]` do not split.
+pub fn split_args(text: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut cur = String::new();
+    let (mut paren, mut brace, mut angle, mut bracket) = (0i32, 0i32, 0i32, 0i32);
+    let mut in_str = false;
+    let mut escaped = false;
+    for c in text.chars() {
+        if in_str {
+            cur.push(c);
+            if escaped {
+                escaped = false;
+            } else if c == '\\' {
+                escaped = true;
+            } else if c == '"' {
+                in_str = false;
+            }
+            continue;
+        }
+        match c {
+            '"' => {
+                in_str = true;
+                cur.push(c);
+            }
+            '(' => { paren += 1; cur.push(c); }
+            ')' => { paren -= 1; cur.push(c); }
+            '{' => { brace += 1; cur.push(c); }
+            '}' => { brace -= 1; cur.push(c); }
+            '<' => { angle += 1; cur.push(c); }
+            '>' => { angle -= 1; cur.push(c); }
+            '[' => { bracket += 1; cur.push(c); }
+            ']' => { bracket -= 1; cur.push(c); }
+            ',' if paren == 0 && brace == 0 && angle == 0 && bracket == 0 => {
+                out.push(cur.trim().to_string());
+                cur.clear();
+            }
+            _ => cur.push(c),
+        }
     }
-    for pat in [format!("{} =", attr), format!("{}=", attr)] {
-        if let Some(p) = t.find(&pat) {
-            let rest = t[p + pat.len()..].trim_start();
-            let rest = rest.strip_prefix('{').map(|r| r.trim_start()).unwrap_or(rest);
-            if let Some(v) = first_string(rest) {
-                return Some(v);
+    if !cur.trim().is_empty() {
+        out.push(cur.trim().to_string());
+    }
+    out
+}
+
+/// Raw source text of `attr = <value>` in an annotation's argument list, cut
+/// at the next top-level comma. Quotes and braces are preserved, so enum
+/// constants such as `RequestMethod.POST` can be read back verbatim.
+pub fn ann_attr_raw(ann: &Ann, attr: &str) -> Option<String> {
+    for seg in split_args(&ann.args) {
+        if let Some(rest) = seg.strip_prefix(attr) {
+            let rest = rest.trim_start();
+            if let Some(v) = rest.strip_prefix('=') {
+                return Some(v.trim().to_string());
             }
         }
     }
     None
+}
+
+/// Annotation attribute's string value: `attr = "v"` or `attr = { "a", "b" }`.
+pub fn ann_string(ann: &Ann, attr: &str) -> Option<String> {
+    let raw = ann_attr_raw(ann, attr)?;
+    let raw = raw.trim_start();
+    let raw = raw.strip_prefix('{').map(str::trim_start).unwrap_or(raw);
+    first_string(raw)
 }
 
 /// Path value of a mapping annotation: `path =`/`value =` or the bare first string.

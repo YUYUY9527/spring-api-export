@@ -68,16 +68,25 @@ fn join_path(base: &str, sub: &str) -> String {
     }
 }
 
-/// @RequestMapping(method = POST) etc. None means no explicit method.
+/// HTTP verbs Spring accepts in `RequestMethod`.
+const HTTP_VERBS: &[&str] = &["GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS", "TRACE"];
+
+/// `@RequestMapping(method = RequestMethod.POST)` (or a set of them).
+/// Returns the first recognised verb, in either attribute order.
 fn explicit_method(anns: &[crate::java::Ann]) -> Option<String> {
     for a in anns {
-        if a.name == "RequestMapping" {
-            if let Some(m) = crate::java::ann_string(a, "method") {
-                // `RequestMethod.POST` -> `POST`
-                let m = m.rsplit('.').next().unwrap_or("").trim().to_uppercase();
-                if !m.is_empty() {
-                    return Some(m);
-                }
+        if a.name != "RequestMapping" {
+            continue;
+        }
+        let raw = match crate::java::ann_attr_raw(a, "method") {
+            Some(r) => r,
+            None => continue,
+        };
+        let inner = raw.trim().trim_start_matches('{').trim_end_matches('}').to_string();
+        for part in crate::java::split_args(&inner) {
+            let verb = part.trim().rsplit('.').next().unwrap_or("").trim().to_uppercase();
+            if HTTP_VERBS.contains(&verb.as_str()) {
+                return Some(verb);
             }
         }
     }
@@ -169,6 +178,25 @@ fn ann_attr_string(args: &str, attr: &str) -> Option<String> {
     crate::java::ann_string(&crate::java::Ann { name: String::new(), args: args.to_string() }, attr)
 }
 
+/// The wire name of `@RequestParam` / `@PathVariable` / `@RequestHeader`:
+/// `value = "x"`, `name = "x"`, or the shorthand `@RequestParam("x")`.
+/// `None` means "use the Java variable name".
+fn param_alias(args: &str) -> Option<String> {
+    let ann = crate::java::Ann { name: String::new(), args: args.to_string() };
+    if let Some(v) = crate::java::ann_string(&ann, "value") {
+        return Some(v);
+    }
+    if let Some(v) = crate::java::ann_string(&ann, "name") {
+        return Some(v);
+    }
+    // Shorthand `@RequestParam("q")`: only when no `attr = value` form exists,
+    // otherwise the first string could be `defaultValue = "..."`.
+    if !args.contains('=') {
+        return crate::java::first_string(args);
+    }
+    None
+}
+
 /// Parses one endpoint from a controller method. Returns None when it has no mapping.
 pub fn parse_endpoint(cls: &JavaClass, m: &MethodRaw) -> Option<Endpoint> {
     let mut method: Option<String> = None;
@@ -257,15 +285,13 @@ pub fn parse_endpoint(cls: &JavaClass, m: &MethodRaw) -> Option<Endpoint> {
         let mut required: Option<bool> = None;
         let mut default: Option<String> = None;
         let mut body_type: Option<String> = None;
+        let mut alias: Option<String> = None;
 
         for (an, args) in &piece_anns {
             match an.as_str() {
                 "RequestParam" => {
                     location = Some("query".into());
-                    if let Some(n) = ann_attr_string(args, "value").or_else(|| ann_attr_string(args, "name")) {
-                        // shadowing the declared name is unusual; keep declared unless empty
-                        let _ = n;
-                    }
+                    alias = param_alias(args);
                     if args.contains("required = false") || args.contains("required=false") {
                         required = Some(false);
                     }
@@ -276,9 +302,11 @@ pub fn parse_endpoint(cls: &JavaClass, m: &MethodRaw) -> Option<Endpoint> {
                 }
                 "PathVariable" => {
                     location = Some("path".into());
+                    alias = param_alias(args);
                 }
                 "RequestHeader" => {
                     location = Some("header".into());
+                    alias = param_alias(args);
                 }
                 "RequestBody" => {
                     body_type = Some(ty.clone());
@@ -305,8 +333,12 @@ pub fn parse_endpoint(cls: &JavaClass, m: &MethodRaw) -> Option<Endpoint> {
             if is_simple_type(&ty) { "query".to_string() } else { "object".to_string() }
         });
 
+        // Spring binds by the annotation alias when one is given; the Java
+        // variable name is only a fallback. Javadoc @param always documents
+        // the variable name, so the description is looked up with `name`.
+        let wire_name = alias.clone().unwrap_or_else(|| name.clone());
         let mut p = Param {
-            name: name.clone(),
+            name: wire_name,
             location: loc,
             java_type: ty.clone(),
             required: required.unwrap_or(true),
@@ -797,5 +829,62 @@ mod tests {
         assert_eq!(names, vec!["name", "level"]);
         assert_eq!(eps[0].params[0].desc, "名称");
         assert!(eps[0].params[0].required);
+    }
+
+    #[test]
+    fn request_mapping_enum_method_in_both_orders() {
+        let src = r#"
+        @RestController
+        public class C {
+            @RequestMapping(value = "/users", method = RequestMethod.POST)
+            public String create() { return "ok"; }
+
+            @RequestMapping(method = RequestMethod.POST, value = "/users")
+            public String createAgain() { return "ok"; }
+
+            @RequestMapping(value = "/multi", method = {RequestMethod.GET, RequestMethod.POST})
+            public String multi() { return "ok"; }
+        }
+        "#;
+        let f = JavaFile::parse(src);
+        let cls = &f.classes[0];
+        let eps: Vec<Endpoint> = cls.methods.iter().filter_map(|m| parse_endpoint(cls, m)).collect();
+        assert_eq!(eps.len(), 3);
+        assert_eq!((eps[0].method.as_str(), eps[0].path.as_str()), ("POST", "/users"));
+        assert_eq!((eps[1].method.as_str(), eps[1].path.as_str()), ("POST", "/users"));
+        assert_eq!((eps[2].method.as_str(), eps[2].path.as_str()), ("GET", "/multi"));
+    }
+
+    #[test]
+    fn explicit_param_names_are_honored() {
+        let src = r#"
+        @RestController
+        public class C {
+            @GetMapping("/users/{id}")
+            public String detail(
+                @PathVariable("id") Long userId,
+                @RequestParam(name = "q") String keyword,
+                @RequestHeader("X-Trace-Id") String traceId,
+                @RequestParam(value = "page", defaultValue = "1") int pageNo) { return "ok"; }
+        }
+        "#;
+        let f = JavaFile::parse(src);
+        let cls = &f.classes[0];
+        let ep = parse_endpoint(cls, &cls.methods[0]).unwrap();
+        let got: Vec<(&str, &str, &str)> = ep
+            .params
+            .iter()
+            .map(|p| (p.name.as_str(), p.location.as_str(), p.java_type.as_str()))
+            .collect();
+        assert_eq!(
+            got,
+            vec![
+                ("id", "path", "Long"),
+                ("q", "query", "String"),
+                ("X-Trace-Id", "header", "String"),
+                ("page", "query", "int"),
+            ]
+        );
+        assert_eq!(ep.params[3].default.as_deref(), Some("1"));
     }
 }
